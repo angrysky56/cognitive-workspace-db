@@ -48,10 +48,10 @@ uv sync
 cp .env.example .env
 # Edit .env and set NEO4J_PASSWORD
 
-# 3. Pull the LLM models (suggested)
+# 3. Pull the LLM models (suggested) Bigger is better, and slower.
 ollama pull qwen3:4b                    # For text generation
-# Optional: Use Qwen embeddings for better quality (1.5GB download)
-# Default is all-MiniLM-L6-v2 (80MB, fast, good quality)
+# Default: Qwen embeddings for better quality (1.5GB download)
+# Basic: all-MiniLM-L6-v2 (80MB, fast, good quality)
 # ollama pull qwen3-embedding:0.6b  # Not needed, sentence-transformers handles it
 
 Add to your AI Client for MCP Server:

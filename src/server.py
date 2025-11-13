@@ -631,23 +631,34 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
         Generate synthesis merging multiple concepts.
 
         LLM merges concept previews; centroid computation happens in vector space.
+        Provides richer context and clearer instructions for better synthesis.
         """
         system_prompt = (
-            "Given multiple concept fragments, write 1-2 sentences unifying them "
-            "into a coherent insight. Be concise and focus on the common thread."
+            "You are a synthesis engine that unifies multiple related concepts into a "
+            "coherent insight. Identify the common themes, complementary aspects, and "
+            "emergent patterns across all concepts. Focus on integration and synergy, "
+            "not just summary. Output 2-4 sentences that capture the unified understanding."
         )
 
-        # Prepare concept previews (keep them short)
-        previews = [f"- {c[:1500]}..." for c in contents[:50]]
-        goal_text = f"\nGoal: {goal}" if goal else ""
+        # Prepare full concepts (don't truncate - LLM needs full context)
+        concept_list = []
+        for i, content in enumerate(contents[:10], 1):  # Cap at 10 for token management
+            concept_list.append(f"{i}. {content}")
+
+        goal_text = f"\n\nTarget Goal: {goal}" if goal else ""
 
         user_prompt = (
-            f"Synthesize these {len(contents)} concepts:{goal_text}\n\n"
-            + "\n".join(previews) +
-            "\n\nUnified insight:"
+            f"Synthesize these {len(contents)} concepts into a unified insight:{goal_text}\n\n"
+            "Concepts to integrate:\n" +
+            "\n\n".join(concept_list) +
+            "\n\nProvide a synthesis that:"
+            "\n- Identifies the common thread or pattern"
+            "\n- Shows how concepts complement or build on each other"
+            "\n- Captures emergent insights from the combination"
+            "\n\nSynthesis:"
         )
 
-        return self._llm_generate(system_prompt, user_prompt, max_tokens=1500)
+        return self._llm_generate(system_prompt, user_prompt, max_tokens=2000)
 
     # ========================================================================
     # Cognitive Primitive 4: Constrain
