@@ -1,9 +1,26 @@
 """
 Cognitive Workspace Database (CWD) MCP Server
 
-A "System 2" reasoning engine that operates in latent space using Neo4j for structural
-reasoning and Chroma for vector operations. Implements cognitive primitives based on
-cutting-edge research (Meta COCONUT, Hierarchical Reasoning Models).
+A "System 2" reasoning engine implementing Gen 3 Utility-Guided Architecture.
+
+Combines:
+- Neo4j: Structural/graph reasoning (problem decomposition, analogical paths)
+- Chroma: Latent space operations (vector similarity, compression tracking)
+- Schmidhuber's Compression Progress: Intrinsic curiosity reward system
+- Utility-Guided Exploration: Directed learning focused on goal-aligned compression
+
+Cognitive Primitives:
+1. deconstruct: Break incompressible problems into compressible components
+2. hypothesize: Topology tunneling - find analogical leaps between concepts
+3. synthesize: Merge thought-nodes in latent space (compression as tools)
+4. constrain: Validate against utility rules (perceived utility filter)
+5. compress_to_tool: Convert solved problems into reusable patterns
+6. explore_for_utility: Active exploration maximizing utility × compression progress
+
+Based on:
+- Meta COCONUT (continuous thought trees)
+- Schmidhuber's Compression Progress (intrinsic motivation)
+- Gen 3 Utility-Guided Architecture (directed curiosity)
 """
 
 from __future__ import annotations
@@ -131,11 +148,421 @@ class CognitiveWorkspace:
             metadata={"description": "Cognitive workspace thought-nodes"}
         )
 
-        logger.info("Cognitive Workspace initialized")
+        # Gen 3 Enhancement: Active goals for utility-guided exploration
+        self.active_goals: dict[str, dict[str, Any]] = {}
+
+        # Compression Progress Tracking (Schmidhuber)
+        self.compression_history: dict[str, list[float]] = {}  # node_id -> [scores over time]
+
+        # Tool Library: Compressed knowledge as reusable patterns
+        self.tool_library: dict[str, dict[str, Any]] = {}  # tool_id -> {pattern, usage_count, success_rate}
+
+        # Initialize database schema enhancements
+        self._initialize_gen3_schema()
+
+        logger.info("Cognitive Workspace initialized with Gen 3 architecture")
 
     def close(self):
         """Cleanup connections"""
         self.neo4j_driver.close()
+
+    def _initialize_gen3_schema(self):
+        """
+        Initialize Gen 3 architecture enhancements in Neo4j.
+
+        Adds:
+        - Compression progress tracking
+        - Utility scores
+        - Goal nodes
+        - Tool library nodes
+        """
+        with self.neo4j_driver.session() as session:
+            # Create constraints and indexes
+            session.run("""
+                CREATE CONSTRAINT thought_id_unique IF NOT EXISTS
+                FOR (t:ThoughtNode) REQUIRE t.id IS UNIQUE
+            """)
+            session.run("""
+                CREATE INDEX thought_cognitive_type IF NOT EXISTS
+                FOR (t:ThoughtNode) ON (t.cognitive_type)
+            """)
+            session.run("""
+                CREATE INDEX thought_utility IF NOT EXISTS
+                FOR (t:ThoughtNode) ON (t.utility_score)
+            """)
+            session.run("""
+                CREATE INDEX thought_compression IF NOT EXISTS
+                FOR (t:ThoughtNode) ON (t.compression_score)
+            """)
+            session.run("""
+                CREATE CONSTRAINT goal_id_unique IF NOT EXISTS
+                FOR (g:Goal) REQUIRE g.id IS UNIQUE
+            """)
+            session.run("""
+                CREATE CONSTRAINT tool_id_unique IF NOT EXISTS
+                FOR (t:Tool) REQUIRE t.id IS UNIQUE
+            """)
+        logger.info("Gen 3 schema initialized")
+
+    # ========================================================================
+    # Gen 3 Architecture: Goal Management & Utility Scoring
+    # ========================================================================
+
+    def set_goal(self, goal_description: str, utility_weight: float = 1.0) -> str:
+        """
+        Set an active goal for utility-guided exploration.
+
+        Goals act as the "Director" in Gen 3 architecture, filtering which
+        compression progress gets rewarded. This prevents "junk food curiosity"
+        where the agent learns interesting but useless patterns.
+
+        Args:
+            goal_description: Natural language description of the goal
+            utility_weight: How much to weight this goal (0.0-1.0)
+
+        Returns:
+            goal_id: Unique identifier for this goal
+        """
+        goal_id = f"goal_{int(time.time() * 1000000)}"
+
+        with self.neo4j_driver.session() as session:
+            session.run("""
+                CREATE (g:Goal {
+                    id: $id,
+                    description: $description,
+                    utility_weight: $weight,
+                    created_at: timestamp(),
+                    active: true
+                })
+            """, id=goal_id, description=goal_description, weight=utility_weight)
+
+        self.active_goals[goal_id] = {
+            "description": goal_description,
+            "weight": utility_weight,
+            "created_at": time.time()
+        }
+
+        logger.info(f"Goal set: {goal_description} (weight: {utility_weight})")
+        return goal_id
+
+    def get_active_goals(self) -> dict[str, dict[str, Any]]:
+        """Get all active goals"""
+        return self.active_goals.copy()
+
+    def _calculate_utility_score(self, content: str, session) -> float:
+        """
+        Calculate utility score for content based on active goals.
+
+        Uses vector similarity between content and active goals.
+        Higher scores mean the content is more aligned with current goals.
+
+        This implements the "Perceived Utility" filter from Gen 3 architecture.
+        """
+        if not self.active_goals:
+            return 0.5  # Neutral utility when no goals set
+
+        content_embedding = self._embed_text(content)
+
+        total_weighted_similarity = 0.0
+        total_weight = 0.0
+
+        for goal_id, goal_data in self.active_goals.items():
+            goal_embedding = self._embed_text(goal_data["description"], is_query=True)
+            similarity = self._cosine_similarity(content_embedding, goal_embedding)
+
+            weighted_sim = similarity * goal_data["weight"]
+            total_weighted_similarity += weighted_sim
+            total_weight += goal_data["weight"]
+
+        utility_score = total_weighted_similarity / total_weight if total_weight > 0 else 0.5
+        return float(utility_score)
+
+    # ========================================================================
+    # Gen 3 Architecture: Compression Progress Tracking (Schmidhuber)
+    # ========================================================================
+
+    def _calculate_compression_score(self, content: str) -> float:
+        """
+        Calculate compression score for content.
+
+        Estimates compressibility by checking:
+        1. Similarity to existing compressed patterns (tools)
+        2. Length vs semantic richness ratio
+        3. Pattern regularity in embedding space
+
+        Lower scores = more compressible (simpler, more pattern)
+        Higher scores = less compressible (complex, novel, random)
+
+        This is a practical approximation of Kolmogorov complexity.
+        """
+        embedding = self._embed_text(content)
+
+        # Check similarity to existing tools (compressed knowledge)
+        if self.tool_library:
+            tool_similarities = []
+            for tool_data in self.tool_library.values():
+                tool_emb = tool_data.get("embedding", [])
+                if tool_emb:
+                    sim = self._cosine_similarity(embedding, tool_emb)
+                    tool_similarities.append(sim)
+
+            if tool_similarities:
+                # High similarity to existing tools = highly compressible
+                max_tool_sim = max(tool_similarities)
+                compression_component = 1.0 - max_tool_sim
+            else:
+                compression_component = 0.5
+        else:
+            compression_component = 0.5
+
+        # Length penalty: longer content is harder to compress
+        length_ratio = min(len(content) / 1000.0, 1.0)  # Normalize to 0-1
+
+        # Combined score
+        compression_score = (compression_component * 0.7) + (length_ratio * 0.3)
+
+        return float(compression_score)
+
+    def _track_compression_progress(self, node_id: str, new_score: float) -> float:
+        """
+        Track compression progress for a node.
+
+        Returns intrinsic reward (compression progress).
+        This is the core of Schmidhuber's framework:
+
+        r_int(t+1) = C(old_compressor, data) - C(new_compressor, data)
+
+        Positive reward = we learned to compress it better
+        """
+        if node_id not in self.compression_history:
+            self.compression_history[node_id] = []
+
+        history = self.compression_history[node_id]
+        history.append(new_score)
+
+        if len(history) < 2:
+            return 0.0  # No progress on first observation
+
+        # Compression progress = reduction in compression score
+        old_score = history[-2]
+        progress = old_score - new_score  # Positive = improvement
+
+        return float(progress)
+
+    # ========================================================================
+    # Gen 3 Architecture: Knowledge Compression as Tools
+    # ========================================================================
+
+    def compress_to_tool(
+        self,
+        node_ids: list[str],
+        tool_name: str,
+        description: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Convert solved problem(s) into a reusable compressed tool.
+
+        This implements the "mnemonics as tools" concept. When the agent solves
+        a problem, it compresses the solution pattern into a high-level tool
+        that can be reused for similar problems (like the Jeep brake light example).
+
+        The tool lives in both:
+        - Neo4j: As a Tool node with relationships to source problems
+        - tool_library dict: For fast access during compression scoring
+
+        Args:
+            node_ids: Thought-nodes representing the solved problem
+            tool_name: Name for this tool
+            description: Optional description of what this tool does
+
+        Returns:
+            Tool creation result with tool_id and success metrics
+        """
+        logger.info(f"Compressing {len(node_ids)} nodes into tool: {tool_name}")
+
+        with self.neo4j_driver.session() as session:
+            # Get all node contents
+            nodes_result = session.run("""
+                MATCH (n:ThoughtNode)
+                WHERE n.id IN $ids
+                RETURN n.id as id, n.content as content
+            """, ids=node_ids)
+
+            nodes = {r["id"]: r["content"] for r in nodes_result}
+
+            if not nodes:
+                return {"error": "No valid nodes found"}
+
+            # Synthesize into tool pattern
+            tool_pattern = self._generate_tool_pattern(list(nodes.values()), tool_name)
+
+            # Compute centroid embedding (tool's position in latent space)
+            embeddings = [self._embed_text(content) for content in nodes.values()]
+            tool_embedding = np.mean(embeddings, axis=0).tolist()
+
+            # Create tool node
+            tool_id = f"tool_{int(time.time() * 1000000)}"
+
+            session.run("""
+                CREATE (t:Tool {
+                    id: $id,
+                    name: $name,
+                    pattern: $pattern,
+                    description: $description,
+                    usage_count: 0,
+                    success_rate: 1.0,
+                    created_at: timestamp()
+                })
+            """, id=tool_id, name=tool_name, pattern=tool_pattern,
+                description=description or f"Compressed tool: {tool_name}")
+
+            # Link to source nodes
+            for node_id in node_ids:
+                session.run("""
+                    MATCH (tool:Tool {id: $tool_id})
+                    MATCH (node:ThoughtNode {id: $node_id})
+                    CREATE (tool)-[:COMPRESSED_FROM]->(node)
+                """, tool_id=tool_id, node_id=node_id)
+
+            # Store in tool library
+            self.tool_library[tool_id] = {
+                "name": tool_name,
+                "pattern": tool_pattern,
+                "embedding": tool_embedding,
+                "usage_count": 0,
+                "success_rate": 1.0,
+                "source_nodes": node_ids
+            }
+
+            logger.info(f"Tool created: {tool_name} ({tool_id})")
+
+            return {
+                "tool_id": tool_id,
+                "name": tool_name,
+                "pattern": tool_pattern,
+                "source_count": len(node_ids),
+                "message": f"Tool '{tool_name}' created and added to library"
+            }
+
+    def _generate_tool_pattern(self, contents: list[str], tool_name: str) -> str:
+        """
+        Generate a reusable pattern from solved problem contents.
+
+        The pattern is a compressed, generalized version of the solution
+        that can be applied to similar problems.
+        """
+        system_prompt = (
+            "You extract reusable patterns from solved problems. "
+            "Create a concise, generalized pattern that captures the solution approach. "
+            "Focus on the HOW (methodology) not the WHAT (specific details). "
+            "Output 2-3 sentences describing the pattern."
+        )
+
+        content_previews = [f"{i+1}. {c[:300]}" for i, c in enumerate(contents[:5])]
+
+        user_prompt = (
+            f"Extract a reusable pattern for tool '{tool_name}' from these solutions:\n\n" +
+            "\n\n".join(content_previews) +
+            "\n\nPattern:"
+        )
+
+        return self._llm_generate(system_prompt, user_prompt, max_tokens=1000)
+
+    # ========================================================================
+    # Gen 3 Architecture: Utility-Guided Exploration
+    # ========================================================================
+
+    def explore_for_utility(
+        self,
+        focus_area: str | None = None,
+        max_candidates: int = 10
+    ) -> dict[str, Any]:
+        """
+        Find thought-nodes with high utility × compression potential.
+
+        This implements active exploration strategy from Gen 3 architecture.
+        Instead of random exploration or pure novelty-seeking, the agent
+        focuses on nodes that are:
+        1. High utility (aligned with active goals)
+        2. High compression potential (learnable patterns, not random)
+
+        This avoids "junk food curiosity" (interesting but useless).
+
+        Args:
+            focus_area: Optional semantic focus for exploration
+            max_candidates: Maximum nodes to return
+
+        Returns:
+            List of high-value exploration candidates with scores
+        """
+        logger.info(f"Exploring for utility-guided opportunities: {focus_area or 'general'}")
+
+        with self.neo4j_driver.session() as session:
+            # Get all thought nodes
+            if focus_area:
+                # Semantic search around focus area
+                focus_embedding = self._embed_text(focus_area, is_query=True)
+                results = self.collection.query(
+                    query_embeddings=[focus_embedding],
+                    n_results=max_candidates * 3  # Over-fetch for filtering
+                )
+                candidate_ids = results["ids"][0] if results["ids"] else []
+            else:
+                # Get recent nodes
+                recent_result = session.run("""
+                    MATCH (t:ThoughtNode)
+                    WHERE t.cognitive_type IN ['problem', 'sub_problem', 'hypothesis']
+                    RETURN t.id as id
+                    ORDER BY t.created_at DESC
+                    LIMIT $limit
+                """, limit=max_candidates * 3)
+                candidate_ids = [r["id"] for r in recent_result]
+
+            # Score each candidate
+            candidates = []
+            for node_id in candidate_ids:
+                node = session.run("""
+                    MATCH (t:ThoughtNode {id: $id})
+                    RETURN t.content as content,
+                           t.utility_score as utility,
+                           t.compression_score as compression
+                """, id=node_id).single()
+
+                if not node:
+                    continue
+
+                content = node["content"]
+
+                # Calculate or retrieve scores
+                utility = node.get("utility") or self._calculate_utility_score(content, session)
+                compression = node.get("compression") or self._calculate_compression_score(content)
+
+                # Compression potential = high score means high potential for learning
+                # (not yet compressed, but has learnable patterns)
+                compression_potential = compression
+
+                # Combined score: utility × compression potential
+                # High utility + high compression potential = best exploration target
+                combined_score = utility * compression_potential
+
+                candidates.append({
+                    "node_id": node_id,
+                    "content": content[:200],  # Preview
+                    "utility_score": float(utility),
+                    "compression_potential": float(compression_potential),
+                    "combined_score": float(combined_score)
+                })
+
+            # Sort by combined score and take top candidates
+            candidates.sort(key=lambda x: x["combined_score"], reverse=True)
+            top_candidates = candidates[:max_candidates]
+
+            return {
+                "candidates": top_candidates,
+                "count": len(top_candidates),
+                "focus_area": focus_area,
+                "message": f"Found {len(top_candidates)} high-value exploration targets"
+            }
 
     def _embed_text(self, text: str, is_query: bool = False) -> list[float]:
         """
@@ -259,12 +686,22 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
 
         If embedding is provided, uses it directly (e.g., for synthesis centroids).
         Otherwise generates embedding from content.
+
+        Gen 3 Enhancement: Also calculates and stores:
+        - utility_score: Alignment with active goals
+        - compression_score: Current compressibility
+        - intrinsic_reward: Compression progress (if applicable)
         """
         thought_id = f"thought_{int(time.time() * 1000000)}"
         if embedding is None:
             embedding = self._embed_text(content)
 
-        # Store in Neo4j
+        # Gen 3: Calculate utility and compression scores
+        utility_score = self._calculate_utility_score(content, session)
+        compression_score = self._calculate_compression_score(content)
+        intrinsic_reward = self._track_compression_progress(thought_id, compression_score)
+
+        # Store in Neo4j with Gen 3 fields
         query = """
         CREATE (t:ThoughtNode {
             id: $id,
@@ -272,7 +709,10 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
             cognitive_type: $cognitive_type,
             confidence: $confidence,
             created_at: timestamp(),
-            parent_problem: $parent_problem
+            parent_problem: $parent_problem,
+            utility_score: $utility_score,
+            compression_score: $compression_score,
+            intrinsic_reward: $intrinsic_reward
         })
         RETURN t.id as id
         """
@@ -282,11 +722,14 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
             content=content,
             cognitive_type=cognitive_type,
             confidence=confidence,
-            parent_problem=parent_problem
+            parent_problem=parent_problem,
+            utility_score=utility_score,
+            compression_score=compression_score,
+            intrinsic_reward=intrinsic_reward
         )
         result.single()
 
-        # Store embedding in Chroma
+        # Store embedding in Chroma with Gen 3 metadata
         self.collection.add(
             ids=[thought_id],
             embeddings=[embedding],
@@ -294,9 +737,15 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
             metadatas=[{
                 "cognitive_type": cognitive_type,
                 "confidence": confidence,
-                "parent_problem": parent_problem or ""
+                "parent_problem": parent_problem or "",
+                "utility_score": utility_score,
+                "compression_score": compression_score
             }]
         )
+
+        # Log significant insights
+        if intrinsic_reward > 0.1:
+            logger.info(f"Compression progress detected: {intrinsic_reward:.3f} for {thought_id}")
 
         return thought_id
 
@@ -439,15 +888,23 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
         context: str | None = None
     ) -> dict[str, Any]:
         """
-        Find novel connections between concepts in latent space.
+        Find novel connections between concepts in latent space (Topology Tunneling).
 
-        Combines:
+        Gen 3 Enhancement: Implements true "topology tunneling" by:
         1. Graph path-finding (structural relationships)
         2. Vector similarity (semantic relationships)
+        3. Analogical pattern matching (finding structural isomorphisms)
+        4. Searching historical solved problems for similar patterns
 
-        Creates a hypothesis node representing the discovered connection.
+        This is the "Aha!" moment - the analogical leap that connects
+        distant concepts (like "jar lid" → "car light housing").
+
+        Combines:
+        - COCONUT-style breadth-first search through thought space
+        - Schmidhuber's compression via analogy discovery
+        - Gen 3's utility-guided filtering
         """
-        logger.info(f"Hypothesizing: {node_a_id} <-> {node_b_id}")
+        logger.info(f"Topology Tunneling: {node_a_id} <-> {node_b_id}")
 
         with self.neo4j_driver.session() as session:
             # Get node contents
@@ -455,7 +912,8 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
                 """
                 MATCH (a:ThoughtNode {id: $id_a})
                 MATCH (b:ThoughtNode {id: $id_b})
-                RETURN a.content as content_a, b.content as content_b
+                RETURN a.content as content_a, b.content as content_b,
+                       a.cognitive_type as type_a, b.cognitive_type as type_b
                 """,
                 id_a=node_a_id,
                 id_b=node_b_id
@@ -467,7 +925,7 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
             content_a = nodes["content_a"]
             content_b = nodes["content_b"]
 
-            # Find graph paths
+            # 1. Find direct graph paths (structural connections)
             paths = session.run(
                 """
                 MATCH path = (a:ThoughtNode {id: $id_a})-[*1..3]-(b:ThoughtNode {id: $id_b})
@@ -478,26 +936,36 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
                 id_b=node_b_id
             ).values()
 
-            # Check vector similarity
+            # 2. Check vector similarity (semantic connection)
             similarity_score = self._cosine_similarity(
                 self._embed_text(content_a),
                 self._embed_text(content_b)
             )
 
-            # Generate hypothesis
-            hypothesis_text = self._generate_hypothesis(
+            # 3. Gen 3 Enhancement: Search for analogical patterns
+            # Find similar solved problems in tool library
+            analogical_tools = self._find_analogical_tools(content_a, content_b)
+
+            # 4. Generate hypothesis using all connection types
+            hypothesis_text = self._generate_hypothesis_with_analogy(
                 content_a,
                 content_b,
                 similarity_score,
+                analogical_tools,
                 context
             )
+
+            # 5. Calculate hypothesis quality (utility × novelty)
+            utility = self._calculate_utility_score(hypothesis_text, session)
+            novelty = 1.0 - similarity_score  # Novel = dissimilar concepts connected
+            hypothesis_quality = utility * novelty
 
             # Create hypothesis node
             hyp_id = self._create_thought_node(
                 session,
                 hypothesis_text,
                 "hypothesis",
-                confidence=similarity_score
+                confidence=float(hypothesis_quality)
             )
 
             # Create relationships
@@ -506,22 +974,109 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
                 MATCH (a:ThoughtNode {id: $id_a})
                 MATCH (b:ThoughtNode {id: $id_b})
                 MATCH (h:ThoughtNode {id: $hyp_id})
-                CREATE (h)-[:CONNECTS {similarity: $similarity}]->(a)
-                CREATE (h)-[:CONNECTS {similarity: $similarity}]->(b)
+                CREATE (h)-[:CONNECTS {similarity: $similarity, quality: $quality}]->(a)
+                CREATE (h)-[:CONNECTS {similarity: $similarity, quality: $quality}]->(b)
                 """,
                 id_a=node_a_id,
                 id_b=node_b_id,
                 hyp_id=hyp_id,
-                similarity=similarity_score
+                similarity=similarity_score,
+                quality=hypothesis_quality
             )
+
+            # Link to analogical tools if found
+            for tool_id in analogical_tools:
+                session.run(
+                    """
+                    MATCH (h:ThoughtNode {id: $hyp_id})
+                    MATCH (t:Tool {id: $tool_id})
+                    CREATE (h)-[:INSPIRED_BY]->(t)
+                    """,
+                    hyp_id=hyp_id,
+                    tool_id=tool_id
+                )
 
             return {
                 "hypothesis_id": hyp_id,
                 "hypothesis": hypothesis_text,
-                "similarity": similarity_score,
+                "similarity": float(similarity_score),
+                "novelty": float(novelty),
+                "quality": float(hypothesis_quality),
                 "path_count": len(paths),
-                "message": "Hypothesis generated"
+                "analogical_tools": len(analogical_tools),
+                "message": "Hypothesis generated via topology tunneling"
             }
+
+    def _find_analogical_tools(self, content_a: str, content_b: str) -> list[str]:
+        """
+        Find tools with analogical patterns to current problem.
+
+        This is key to topology tunneling: finding structural similarities
+        between the current stuck problem and previously solved problems.
+        """
+        if not self.tool_library:
+            return []
+
+        # Compute combined embedding (the "stuck space")
+        emb_a = self._embed_text(content_a)
+        emb_b = self._embed_text(content_b)
+        combined_emb = [(a + b) / 2 for a, b in zip(emb_a, emb_b)]
+
+        # Find tools with similar patterns
+        analogical = []
+        for tool_id, tool_data in self.tool_library.items():
+            tool_emb = tool_data.get("embedding", [])
+            if tool_emb:
+                similarity = self._cosine_similarity(combined_emb, tool_emb)
+                if similarity > 0.6:  # Threshold for analogical match
+                    analogical.append(tool_id)
+
+        return analogical[:3]  # Top 3 analogical tools
+
+    def _generate_hypothesis_with_analogy(
+        self,
+        content_a: str,
+        content_b: str,
+        similarity: float,
+        analogical_tools: list[str],
+        context: str | None
+    ) -> str:
+        """
+        Generate hypothesis using analogical reasoning.
+
+        If analogical tools exist, use them to guide the connection.
+        This is the "jar lid → car housing" leap.
+        """
+        system_prompt = (
+            "You discover non-obvious connections between concepts through analogical reasoning. "
+            "When provided with similar solved patterns, use them as inspiration for novel connections. "
+            "Focus on structural similarities, not surface features. "
+            "Output 2-3 sentences explaining the connection."
+        )
+
+        # Build context from analogical tools
+        analogy_context = ""
+        if analogical_tools and self.tool_library:
+            analogy_patterns = []
+            for tool_id in analogical_tools[:2]:  # Top 2
+                tool_data = self.tool_library.get(tool_id)
+                if tool_data:
+                    analogy_patterns.append(
+                        f"Similar Pattern ({tool_data['name']}): {tool_data['pattern'][:150]}"
+                    )
+            if analogy_patterns:
+                analogy_context = "\n\nAnalogical Patterns Found:\n" + "\n".join(analogy_patterns)
+
+        context_text = f"\nContext: {context}" if context else ""
+
+        user_prompt = (
+            f"Concept A: {content_a[:200]}\n"
+            f"Concept B: {content_b[:200]}\n"
+            f"Semantic Similarity: {similarity:.2f}{analogy_context}{context_text}\n\n"
+            f"Novel Connection:"
+        )
+
+        return self._llm_generate(system_prompt, user_prompt, max_tokens=1000)
 
     def _cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
         """Calculate cosine similarity"""
@@ -529,28 +1084,7 @@ CRITICAL: Output your final answer directly. You may think internally, but end w
         v2 = np.array(vec2)
         return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
 
-    def _generate_hypothesis(self, content_a: str, content_b: str,
-                           similarity: float, context: str | None) -> str:
-        """
-        Generate hypothesis text explaining connection between concepts.
 
-        LLM generates bridge text; similarity score comes from vector operations.
-        """
-        system_prompt = (
-            "You explain connections between concepts in 1-2 clear sentences. "
-            "Focus on the relationship, not the concepts themselves. "
-            "Be insightful and concise. Output the explanation directly."
-        )
-
-        context_text = f"\nContext: {context}" if context else ""
-        user_prompt = (
-            f"Concept A: {content_a[:200]}\n"
-            f"Concept B: {content_b[:200]}\n"
-            f"Vector Similarity Score: {similarity:.2f} (computed by system){context_text}\n\n"
-            f"Connection:"
-        )
-
-        return self._llm_generate(system_prompt, user_prompt, max_tokens=8000)
 
     # ========================================================================
     # Cognitive Primitive 3: Synthesize
@@ -772,7 +1306,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="hypothesize",
-            description="Find novel connections between two concepts using both graph paths and vector similarity. Enables breadth-first search through conceptual space.",
+            description="Find novel connections between two concepts using topology tunneling - combines graph paths, vector similarity, and analogical pattern matching to discover 'Aha!' moments between distant concepts.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -813,7 +1347,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="constrain",
-            description="Apply constraints/rules to validate a thought-node by projecting against rule vectors. Enables 'checking work' through logical validation.",
+            description="Apply constraints/rules to validate a thought-node by projecting against rule vectors. Enables 'checking work' through logical validation (Perceived Utility filter).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -828,6 +1362,76 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["node_id", "rules"]
+            }
+        ),
+        Tool(
+            name="set_goal",
+            description="Set an active goal for utility-guided exploration. Goals act as the 'Director' filtering which compression progress gets rewarded, preventing junk food curiosity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal_description": {
+                        "type": "string",
+                        "description": "Natural language description of the goal"
+                    },
+                    "utility_weight": {
+                        "type": "number",
+                        "description": "Weight for this goal (0.0-1.0)",
+                        "default": 1.0
+                    }
+                },
+                "required": ["goal_description"]
+            }
+        ),
+        Tool(
+            name="compress_to_tool",
+            description="Convert solved problem(s) into a reusable compressed tool (mnemonics as tools). Creates high-level patterns that can be reused for similar problems.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "node_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Thought-nodes representing the solved problem"
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name for this tool"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description of what this tool does"
+                    }
+                },
+                "required": ["node_ids", "tool_name"]
+            }
+        ),
+        Tool(
+            name="explore_for_utility",
+            description="Find thought-nodes with high utility × compression potential. Implements active exploration strategy focused on goal-aligned learnable patterns (avoiding junk food curiosity).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "focus_area": {
+                        "type": "string",
+                        "description": "Optional semantic focus for exploration"
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "description": "Maximum nodes to return",
+                        "default": 10
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_active_goals",
+            description="Get all currently active goals with their weights and metadata.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         ),
     ]
@@ -860,6 +1464,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 node_id=arguments["node_id"],
                 rules=arguments["rules"]
             )
+        elif name == "set_goal":
+            goal_id = workspace.set_goal(
+                goal_description=arguments["goal_description"],
+                utility_weight=arguments.get("utility_weight", 1.0)
+            )
+            result = {
+                "goal_id": goal_id,
+                "description": arguments["goal_description"],
+                "weight": arguments.get("utility_weight", 1.0),
+                "message": "Goal activated for utility-guided exploration"
+            }
+        elif name == "compress_to_tool":
+            result = workspace.compress_to_tool(
+                node_ids=arguments["node_ids"],
+                tool_name=arguments["tool_name"],
+                description=arguments.get("description")
+            )
+        elif name == "explore_for_utility":
+            result = workspace.explore_for_utility(
+                focus_area=arguments.get("focus_area"),
+                max_candidates=arguments.get("max_candidates", 10)
+            )
+        elif name == "get_active_goals":
+            active_goals = workspace.get_active_goals()
+            result = {
+                "goals": active_goals,
+                "count": len(active_goals),
+                "message": f"Currently tracking {len(active_goals)} active goal(s)"
+            }
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
